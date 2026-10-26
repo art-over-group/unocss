@@ -111,9 +111,12 @@ class TokenProcessor<Theme extends object> {
   }
 
   getCachedTokens(input: string) {
-    return Array.from(this.cache)
-      .filter(([token, result]) => result && token.startsWith(input))
-      .map(([token]) => token)
+    const tokens: string[] = []
+    for (const [token, result] of this.cache) {
+      if (result && token.startsWith(input))
+        tokens.push(token)
+    }
+    return tokens
   }
 
   getCachedAliases(token: string) {
@@ -121,10 +124,12 @@ class TokenProcessor<Theme extends object> {
     if (!target)
       return
 
-    return Array.from(this.cache)
-      .filter(([, utilities]) => utilities?.length === target.length
-        && utilities.every((utility, index) => utility[2] === target[index][2]))
-      .map(([alias]) => alias)
+    const aliases: string[] = []
+    for (const [alias, utilities] of this.cache) {
+      if (utilities?.length === target.length && utilities.every((utility, index) => utility[2] === target[index][2]))
+        aliases.push(alias)
+    }
+    return aliases
   }
 
   block(tokens: Iterable<string>) {
@@ -414,16 +419,16 @@ class UnoGeneratorInternal<Theme extends object = object> {
         return rawLayerCache[layer]
 
       let css = Array.from(sheet)
-        .sort((a, b) => ((this.tokenProcessor.getParentOrder(a[0]) ?? 0) - (this.tokenProcessor.getParentOrder(b[0]) ?? 0)) || a[0]?.localeCompare(b[0] || '') || 0)
+        .sort((a, b) => ((this.tokenProcessor.getParentOrder(a[0]) ?? 0) - (this.tokenProcessor.getParentOrder(b[0]) ?? 0)) || (a[0] || '').localeCompare(b[0] || '') || 0)
         .map(([parent, items]) => {
           const sorted: PreparedRule[] = items
             .filter(i => (i[4]?.layer || LAYER_DEFAULT) === layer)
             .sort((a, b) => {
               return a[0] - b[0] // rule index
                 || (a[4]?.sort || 0) - (b[4]?.sort || 0) // sort context
-                || a[5]?.currentSelector?.localeCompare(b[5]?.currentSelector ?? '') // shortcuts
-                || a[1]?.localeCompare(b[1] || '') // selector
-                || a[2]?.localeCompare(b[2] || '') // body
+                || (a[5]?.currentSelector ?? '').localeCompare(b[5]?.currentSelector ?? '') // shortcuts
+                || (a[1] || '').localeCompare(b[1] || '') // selector
+                || (a[2] || '').localeCompare(b[2] || '') // body
                 || 0
             })
             .map(([, selector, body, , meta, , variantNoMerge]) => {
@@ -480,15 +485,14 @@ class UnoGeneratorInternal<Theme extends object = object> {
             })
             .filter(Boolean)
 
-          const rules = Array.from(new Set(ruleLines))
+          const css = Array.from(new Set(ruleLines))
             .reverse()
             .join(nl)
 
           if (!parent)
-            return rules
+            return css
 
-          const parents = parent.split(' $$ ')
-          return `${parents.join('{')}{${nl}${rules}${nl}${'}'.repeat(parents.length)}`
+          return wrapWithParent(parent, css, nl)
         })
         .filter(Boolean)
         .join(nl)
@@ -728,10 +732,15 @@ class UnoGeneratorInternal<Theme extends object = object> {
 
     return this.applyVariants([0, overrideSelector || context.rawSelector, normalizedBody, undefined, context.variantHandlers])
       .map(({ selector, entries, parent }) => {
-        const cssBody = `${selector}{${entriesToCss(entries)}}`
-        if (parent)
-          return `${parent}{${cssBody}}`
-        return cssBody
+        // Rules that return their CSS as a raw string bypass the scope
+        // placeholder expansion applied to normal utilities at render time,
+        // so expand the `$$` slots left by prefix- and parent-based variants
+        // here.
+        const css = `${applyScope(selector)}{${entriesToCss(entries)}}`
+        if (parent) {
+          return wrapWithParent(parent, css)
+        }
+        return css
       })
       .join('')
   }
@@ -1145,6 +1154,11 @@ function applyScope(css: string, scope?: string) {
     return css.replace(regexScopePlaceholder, scope ? ` ${scope} ` : ' ')
   else
     return scope ? `${scope} ${css}` : css
+}
+
+function wrapWithParent(parent: string, css: string, nl = '') {
+  const parents = parent.split(' $$ ')
+  return `${parents.join('{')}{${nl}${css}${nl}${'}'.repeat(parents.length)}`
 }
 
 const attributifyRe = /^\[(.+?)(~?=)"(.*)"\]$/
